@@ -1,0 +1,133 @@
+ /*
+  * MPUReporter.ino
+  *
+  *  Created on: Feb 27, 2017
+  *      Author: Knud
+  */
+ #include "application.h"
+
+ PRODUCT_ID(PLATFORM_ID);
+ PRODUCT_VERSION(3);
+
+ #if Wiring_WiFi
+ STARTUP(System.enable(SYSTEM_FLAG_WIFITESTER_OVER_SERIAL1));
+ #endif
+
+ SYSTEM_MODE(AUTOMATIC);
+
+ char publishString[40];
+
+ const int MPU_addr = 0x68;  // I2C address of the MPU-6050
+ int16_t AcX, AcY, AcZ, Tmp, GyX, GyY, GyZ;
+ double tempC;
+ double gx;
+
+ unsigned long lastTime;
+
+ void setup() {
+   // Register variables and functions
+   Particle.function("myFunc", myFunc);
+   Particle.variable("temp", tempC);
+   Particle.variable("gx", gx);
+
+   Wire.begin();
+   Wire.beginTransmission(MPU_addr);
+   Wire.write(0x6B);  // PWR_MGMT_1 register
+   Wire.write(0);     // set to zero (wakes up the MPU-6050)
+   Wire.endTransmission(true);
+
+   lastTime = millis();
+   Serial.begin(115200);
+   Serial.println("\nSimple MPU-6050 reader");
+ }
+
+ float dt = 0.5;
+ float xk_1 = 0, vk_1 = 0, a = 1.5, b = .5;
+ float xk, vk, rk;
+ float xm;
+ void loop() {
+   // Get data from 6050 register
+   Wire.beginTransmission(MPU_addr);
+   Wire.write(0x3B);  // starting with register 0x3B (ACCEL_XOUT_H)
+   Wire.endTransmission(false);
+   Wire.requestFrom(MPU_addr, 14, true); // request a total of 14 registers
+   AcX = Wire.read() << 8 | Wire.read(); // 0x3B (ACCEL_XOUT_H) & 0x3C (ACCEL_XOUT_L)
+   AcY = Wire.read() << 8 | Wire.read(); // 0x3D (ACCEL_YOUT_H) & 0x3E (ACCEL_YOUT_L)
+   AcZ = Wire.read() << 8 | Wire.read(); // 0x3F (ACCEL_ZOUT_H) & 0x40 (ACCEL_ZOUT_L)
+   Tmp = Wire.read() << 8 | Wire.read(); // 0x41 (TEMP_OUT_H) & 0x42 (TEMP_OUT_L)
+   GyX = Wire.read() << 8 | Wire.read(); // 0x43 (GYRO_XOUT_H) & 0x44 (GYRO_XOUT_L)
+   GyY = Wire.read() << 8 | Wire.read(); // 0x45 (GYRO_YOUT_H) & 0x46 (GYRO_YOUT_L)
+   GyZ = Wire.read() << 8 | Wire.read(); // 0x47 (GYRO_ZOUT_H) & 0x48 (GYRO_ZOUT_L)
+
+   // update exposed variables
+   tempC = Tmp / 340.00 + 36.53;
+   gx = GyX;
+
+   // update alpha-beta filter
+   xm = AcX + AcY + AcZ;
+   xk = xk_1 + vk_1*dt;
+   vk = vk_1;
+   rk = xm - xk;
+   xk += a*rk;
+   vk += (b*rk)/dt;
+   xk_1 = xk;
+   vk_1 = vk;
+
+   // check if shake happened more than 1 s ago
+   if (xk < 0.0 && (millis() - lastTime) > 1000)
+   {
+     sprintf(publishString,"%d:%d:%d",AcX,AcY,AcZ);
+     Particle.publish("Shake accel XYZ",publishString);
+     Serial.println("published data!");
+   }
+   // heartbeat
+   if (millis() - lastTime > 5000)
+   {
+     sprintf(publishString,"%d",millis());
+     Particle.publish("heartbeat",publishString);
+     lastTime = millis();
+   }
+   delay(100);
+ }
+
+ /*******************************************************************************
+  * Function Name  : myFunc
+  * Description    : Test function
+  * Input          : String dummy - not used
+  * Output         : None
+  * Return         : INT value AcX
+  *******************************************************************************/
+ int myFunc(String dummy) {
+   Wire.beginTransmission(MPU_addr);
+   Wire.write(0x3B);  // starting with register 0x3B (ACCEL_XOUT_H)
+   Wire.endTransmission(false);
+   Wire.requestFrom(MPU_addr, 14, true);  // request a total of 14 registers
+   AcX = Wire.read() << 8 | Wire.read(); // 0x3B (ACCEL_XOUT_H) & 0x3C (ACCEL_XOUT_L)
+   AcY = Wire.read() << 8 | Wire.read(); // 0x3D (ACCEL_YOUT_H) & 0x3E (ACCEL_YOUT_L)
+   AcZ = Wire.read() << 8 | Wire.read(); // 0x3F (ACCEL_ZOUT_H) & 0x40 (ACCEL_ZOUT_L)
+   Tmp = Wire.read() << 8 | Wire.read(); // 0x41 (TEMP_OUT_H) & 0x42 (TEMP_OUT_L)
+   GyX = Wire.read() << 8 | Wire.read(); // 0x43 (GYRO_XOUT_H) & 0x44 (GYRO_XOUT_L)
+   GyY = Wire.read() << 8 | Wire.read(); // 0x45 (GYRO_YOUT_H) & 0x46 (GYRO_YOUT_L)
+   GyZ = Wire.read() << 8 | Wire.read(); // 0x47 (GYRO_ZOUT_H) & 0x48 (GYRO_ZOUT_L)
+   Serial.print("AcX = ");
+   Serial.print(AcX);
+   Serial.print(" | AcY = ");
+   Serial.print(AcY);
+   Serial.print(" | AcZ = ");
+   Serial.print(AcZ);
+   Serial.print(" | Tmp = ");
+   Serial.print(Tmp / 340.00 + 36.53); //equation for temperature in degrees C from datasheet
+   Serial.print(" | GyX = ");
+   Serial.print(GyX);
+   Serial.print(" | GyY = ");
+   Serial.print(GyY);
+   Serial.print(" | GyZ = ");
+   Serial.println(GyZ);
+
+   // Publish it
+     sprintf(publishString,"%d:%d:%d",GyX,GyY,GyZ);
+     Particle.publish("MyFunc Gyro XYZ",publishString);
+     Serial.println("published data!");
+   // return a value
+   return GyX;
+ }
